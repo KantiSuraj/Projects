@@ -41,8 +41,7 @@ else:
 # 5. The Hook,"if hasattr(args, 'func'):","The code checks: ""Did the sub-command we picked leave us a function to run?"" (Yes, it’s add_func)."
 # 6. Execution,args.func(args),"The script calls add_func(args). Inside that function, args.filename resolves to 'photo.jpg'."
 
-# Structure: Subparsers are added to an existing ArgumentParser instance using the add_subparsers() method. Each individual sub-command is then created by calling the add_parser() method on the object returned by add_subparsers().
-# Positional Argument: The user specifies which subparser to use by providing its name as a positional argument on the command line. This name triggers the corresponding subparser to handle the subsequent arguments.
+
 
 
 
