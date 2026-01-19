@@ -25,3 +25,36 @@ Python
 Scenario,Resulting args object
 With dest='command',"Namespace(command='add', filename='photo.jpg', func=<function...>)"
 Without dest,"Namespace(filename='photo.jpg', func=<function...>)"
+
+When you use add_parser.add_argument("paths", ...) instead of filename, the key inside the args object changes to match the name you gave the argument.
+
+How the args Object Changes
+If you run the command: python git.py add file1.txt file2.txt
+
+The args object will now look like this
+# args object
+{
+    'command': 'add',          # From dest='command' in add_subparsers
+    'paths': ['file1.txt', 'file2.txt'],  # From add_argument("paths", nargs='+')
+    'func': <function add_func>
+}
+
+Why the key name changed
+The argparse library uses the first string you provide in add_argument as the variable name (the key) in the resulting object.
+
+If you write add_argument("filename"), you get args.filename.
+
+If you write add_argument("paths"), you get args.paths.
+
+What does nargs='+' do?
+This is a very "Git-like" design choice.
+
+nargs='+' tells Python: "Expect one or more values and put them all into a list."
+
+This is why args.paths becomes ['file1.txt', 'file2.txt'] instead of just a single string.
+
+Yes. Every time you call .add_argument() on a subparser, you are telling Python: "When this specific sub-command is used, look for these extra details and add them as keys to the args object."
+
+If the user runs commit, those paths keys won't exist in the args object, because they belong specifically to the add branch.
+
+Would you like to see how to implement the SHA-1 hashing and zlib compression in Python to actually process those paths?
