@@ -236,13 +236,24 @@ class Repository:
            raise FileNotFoundError(f"Path {path} not found")
         if not full_path.is_dir():
             raise ValueError(f"{path} is not a directory")
+        ignore_list = set()
+        ignore_file_path = self.path / ".pygitignore"
+        if ignore_file_path.exists():
+            lines = ignore_file_path.read_text().splitlines()
+            ignore_list = {line.strip() for line in lines if line.strip() and not line.startswith("#")}
+
         index = self.load_index()
         added_count = 0
         #recursively traverse the directory
         for file_path in full_path.rglob("*"):#recursively yield file,directories matching the relative path in the sub tree
             
             if file_path.is_file():
+                rel_path = str(file_path.relative_to(self.path)) #we need rel path here file path is abs path
+
                 if ".pygit" in file_path.parts:
+                    continue
+                
+                if any(part in ignore_list for part in file_path.parts) or rel_path in ignore_list:
                     continue
 
                 #creat blob objcts for all files
@@ -251,7 +262,6 @@ class Repository:
                 #store all blobs in the object database(.git/objects)
                 blob_hash = self.store_object(blob)
                 #update index
-                rel_path = str(file_path.relative_to(self.path)) #we need rel path here file path is abs path
                 index[rel_path] = blob_hash
                 added_count += 1
         
@@ -328,7 +338,7 @@ class Repository:
             return head_content[16:]
         return "HEAD" #detached Head
     
-    #current commit is present in refs/head/filename(poimting to a commit_hash)
+    #current commit is present in refs/head/filename(pointing to a commit_hash)
     def get_branch_commit(self,current_branch:str):
         branch_file = self.heads_dir / current_branch
 
@@ -375,7 +385,155 @@ class Repository:
         self.save_index({})
         print(f"Created commit {commit_hash} on branch {current_branch}")
         return commit_hash
+
+
+    def get_files_from_tree_recursive(self,tree_hash:str,prefix:str=""):
+        files = {}
+        try:
+            tree_obj = self.load_object(tree_hash)
+            tree = Tree.from_content(tree_obj.content)
+            #list<tuple<str,str,str>>
+            for mode,name,obj_hash in tree.entries:
+                rel_path = f"{prefix}/{name}" if prefix else name
+
+                if mode == "40000":
+                    subtree_files = self.get_files_from_tree_recursive(
+                        obj_hash , rel_path
+                    )
+                    files.update(subtree_files)
+                else:
+                    files[rel_path] = obj_hash
+        except Exception as e:
+            print(f"Warning: Could not read tree {tree_hash}: {e}")
+        return files
+
+    def is_dirty(self)->bool:
+        index = self.load_index()
+
+        #Compare Index to Working Directory 
+        for rel_path,blob_hash in index.items():
+            full_path = self.path / rel_path
+            if not full_path.exists():
+                return True # File was deleted manually
+            
+            # Read current file and see if its hash matches the index
+            current_content = full_path.read_bytes()
+            current_blob = Blob(current_content)
+            if current_blob.hash() != blob_hash:
+                return True #File has been modified but not added
+            
+            #2 Compare Head to Index
+            current_branch = self.get_current_branch()
+            head_commit_hash = self.get_branch_commit(current_branch)
+            if head_commit_hash:
+                head_commit_obj = self.load_object(head_commit_hash)
+                head_commit = Commit.from_content(head_commit_obj.content)
+                head_files = self.get_files_from_tree_recursive(head_commit.tree_hash)
+
+            if head_files != index:
+                return True # There are staged changed not yet commited
+        return False    
+
+    def restore_tree(self,tree_hash:str,path:Path):
+        # this function is to write back to file
+        try:
+            tree_obj = self.load_object(tree_hash)
+            tree = Tree.from_content(tree_obj.content)
+            for mode,name,obj_hash in tree.entries:
+                file_path = path / name
+                if mode.startswith("100"):
+                    blob_obj = self.load_object(obj_hash)
+                    blob = Blob(blob_obj.content)
+                    file_path.write_bytes(blob.content)
+                elif mode.startswith("400"):
+                    file_path.mkdir(exist_ok=True)
+                    self.restore_tree(
+                        obj_hash,file_path
+                    )
+                  
+        except Exception as e:
+            print(f"Warning: Could not read tree {tree_hash}: {e}")
+
         
+
+    def restore_working_directory(self,branch:str,files_to_clear:Dict[str,str]):
+        target_commit_hash = self.get_branch_commit(branch)
+        if not target_commit_hash:
+            return
+        
+        #load the file of checkout branch
+        target_commit_obj = self.load_object(target_commit_hash)
+        target_commit = Commit.from_content(target_commit_obj.content)
+        # This gives us EXACTLY what the index needs to look like
+        new_files = self.get_files_from_tree_recursive(target_commit.tree_hash)
+        
+        #SMART CLEAR: Only delete files that are NOT in the new branch
+        # remove the files from working_Dir tracked by previous branch
+        for rel_path in files_to_clear.keys():
+            if rel_path not in new_files:
+                file_path = self.path / rel_path # we need absolute path
+            try:
+                if file_path.is_file():
+                    file_path.unlink()
+            except Exception:
+                pass
+
+        
+        # Restore/Overwrite files from the NEW branch
+        if target_commit.tree_hash:
+            self.restore_tree(target_commit.tree_hash,self.path)
+            
+        # Update index to match the new branch state
+        self.save_index(new_files)
+
+
+
+
+    def checkout(self,branch:str,create_branch:bool):
+        #safety check
+        if self.is_dirty():
+            print("Error: Your local changes to the following files would be overwritten by checkout:")
+            print("Please commit your changes or stash them before you switch branches.")
+            return
+        
+        #computed the files to clear from the prevous commit
+        previous_branch = self.get_current_branch()
+        files_to_clear = {}
+        try:
+            previous_commit_hash = self.get_branch_commit(previous_branch)
+            if previous_commit_hash:
+                previous_commit_object = self.load_object(previous_commit_hash)
+                prev_commit = Commit.from_content(previous_commit_object.content)
+                if prev_commit.tree_hash:
+                    files_to_clear = self.get_files_from_tree_recursive(
+                        prev_commit.tree_hash
+                    )
+        
+        except Exception:
+            files_to_clear = {}
+
+        #created a new branch
+        branch_file = self.heads_dir / branch
+        if not branch_file.exists():
+            if create_branch:
+                if previous_commit_hash:
+                    self.set_branch_commit(branch,previous_commit_hash)
+                    print(f"Created the new branch")
+                else:
+                    print("No commits yet, cannot create a branch")
+                    return
+
+            else:
+                print(f"Branch '{branch}' not found.")
+                print(
+                    f"Use 'python main.pyf checkout -b {branch} to create and switch to a new branch"
+                )
+                return
+
+        self.head_file.write_text(f"ref: refs/heads/{branch}\n")
+        #restore working directory remove the files prev_branch and add load the files of curr_branch
+        self.restore_working_directory(branch,files_to_clear) 
+        print(f"Switched to branch {branch}")   
 
 def main():
     parser = argparse.ArgumentParser(
@@ -396,7 +554,10 @@ def main():
     commit_parser.add_argument("-m","--message",help="Create a new commit",required=True)
     commit_parser.add_argument("--author",help="Author nameand email")
 
-
+    #checkout command
+    checkout_parser = subparsers.add_parser("checkout",help="Move/Create a new branch")
+    checkout_parser.add_argument("-b","--create-branch",action="store_true",help="Create and switch to a new branch")
+    checkout_parser.add_argument("branch",help="Branch to switch to")
 
     args = parser.parse_args()
 
@@ -421,8 +582,12 @@ def main():
                 return
             author = args.author or "PyGit user <user@pygit.com>"
             repo.commit(args.message,author)
-
-
+        elif args.command == "checkout":
+            if not repo.get_dir.exists():
+                print("Not a git repository")
+                return
+            repo.checkout(args.branch,args.create_branch)
+            
 
     except Exception as e:
         print(f"Error: {e}")

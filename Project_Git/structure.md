@@ -58,3 +58,24 @@ Yes. Every time you call .add_argument() on a subparser, you are telling Python:
 If the user runs commit, those paths keys won't exist in the args object, because they belong specifically to the add branch.
 
 Would you like to see how to implement the SHA-1 hashing and zlib compression in Python to actually process those paths?
+
+
+1. What is special about "store_true"?
+The string "store_true" is a pre-defined instruction for argparse.
+
+In programming, we often have "Flags"—arguments that don't need a value (like "hello"), they just need to be there.
+
+Without "store_true": argparse expects a value. If you ran checkout --create-branch, it would crash saying "expected one argument."
+
+With "store_true": argparse follows this logic:
+
+If the user does not type --create-branch, set args.create_branch = False.
+
+If the user does type --create-branch, set args.create_branch = True.
+
+2. Is there an args.b?
+No. By default, argparse prioritizes the long-form name (--create-branch) for the Python attribute.
+
+When you define: add_argument("-b", "--create-branch", ...)
+
+argparse assumes -b is just a "shortcut" for typing. Both the shortcut and the long name save their result into the same variable: args.create_branch.
