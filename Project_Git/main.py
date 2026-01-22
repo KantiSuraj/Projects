@@ -77,7 +77,7 @@ class Tree(GitObject):
             obj_hash = content[null_idx + 1 : null_idx + 21].hex()
             tree.entries.append((mode,name,obj_hash))#class method
 
-            i = null_idx + 1
+            i = null_idx + 21
         return tree
 
 
@@ -248,22 +248,25 @@ class Repository:
         for file_path in full_path.rglob("*"):#recursively yield file,directories matching the relative path in the sub tree
             
             if file_path.is_file():
-                rel_path = str(file_path.relative_to(self.path)) #we need rel path here file path is abs path
 
                 if ".pygit" in file_path.parts:
                     continue
-                
                 if any(part in ignore_list for part in file_path.parts) or rel_path in ignore_list:
                     continue
 
+                rel_path = str(file_path.relative_to(self.path)) #we need rel path here file path is abs path
                 #creat blob objcts for all files
                 content = file_path.read_bytes()
-                blob = Blob(content)
-                #store all blobs in the object database(.git/objects)
-                blob_hash = self.store_object(blob)
-                #update index
-                index[rel_path] = blob_hash
-                added_count += 1
+                new_hash = Blob(content).hash()
+                #improvement:Only store and update if the hash has changed
+                if index[rel_path] != new_hash:
+                    blob = Blob(content)
+                    #store all blobs in the object database(.git/objects)
+                    blob_hash = self.store_object(blob)
+                    #update index
+                    index[rel_path] = blob_hash
+                    added_count += 1
+                    print(f"Staged change: {rel_path}")
         
         self.save_index(index)
         if added_count > 0:
