@@ -354,6 +354,25 @@ class Repository:
         branch_file = self.heads_dir / current_branch
         branch_file.write_text(commit_hash + "\n")
         
+    def get_all_files(self)->List[Path]:
+        # why we don't used tree because tree forms only on commit
+        files = []
+        ignore_list = set()
+        ignore_file_path = self.path / ".pygitignore"
+        if ignore_file_path.exists():
+            lines = ignore_file_path.read_text().splitlines()
+            ignore_list = {line.strip() for line in lines if line.strip() and not line.startswith("#")}
+
+        #recursively yield file,directories matching the relative path in the sub tree
+        for file_path in self.path.rglob("*"):
+            if file_path.is_file():
+                if ".pygit" in file_path.parts:
+                    continue
+                if any(part in ignore_list for part in file_path.parts):
+                    continue
+                files.append(file_path)
+        return files
+
 
     def commit(self,message:str,author:str):
         # create the tree object from the index (staging area)
@@ -427,12 +446,14 @@ class Repository:
                 return True #File has been modified but not added
             
             #2 Compare Head to Index
+            head_files ={}
             current_branch = self.get_current_branch()
             head_commit_hash = self.get_branch_commit(current_branch)
             if head_commit_hash:
                 head_commit_obj = self.load_object(head_commit_hash)
                 head_commit = Commit.from_content(head_commit_obj.content)
-                head_files = self.get_files_from_tree_recursive(head_commit.tree_hash)
+                if head_commit.tree_hash:
+                    head_files = self.get_files_from_tree_recursive(head_commit.tree_hash)
 
             if head_files != index:
                 return True # There are staged changed not yet commited
@@ -602,6 +623,92 @@ class Repository:
             commit_hash = commit.parent_hashes[0] if commit.parent_hashes else None
             count += 1
 
+    def status(self):
+        # what branch we are on
+        current_branch = self.get_current_branch()
+        print(f"On branch {current_branch}")
+        index = self.load_index()
+        current_commit_hash = self.get_branch_commit(current_branch)
+        # build the index of the latest commit
+        last_index = {}
+        if current_commit_hash:
+            try:
+                commit_obj = self.load_object(current_commit_hash)
+                commit = Commit.from_content(commit_obj.content)
+                if commit.tree_hash:
+                    last_index = self.get_files_from_tree_recursive(commit.tree_hash)
+            except:
+                last_index = {}
+        
+
+        #figure out ll the files present in working dir 
+        working_files = {}  # filename -> hash
+        for  item in self.get_all_files():  
+            rel_path = str(item.relative_to(self.path))
+
+            try:
+                content = item.read_bytes()
+                blob = Blob(content)
+                working_files[rel_path] = blob.hash()
+            except:
+                continue    
+
+        staged_files = []
+        unstaged_files = []
+        untracked_files = []
+        deleted_files = []
+        # what files are present in staging area ready for commiting
+        for file_path in set(index.keys()) | set(last_index.keys()):
+            index_hash = index.get(file_path)
+            last_index_hash = last_index.get(file_path)
+
+            if index_hash and not last_index_hash:
+                staged_files.append(("new_file" , file_path))
+            elif index_hash and last_index_hash and index_hash != last_index_hash:
+                staged_files.append(("modified",file_path))
+        if staged_files:
+            print("\nChanges to be commited:")
+            for stage_status,file_path in sorted(staged_files):
+                print(f"   {stage_status}: {file_path}") 
+
+           
+        # what files are modified but are not been staged
+        for file_path in working_files:
+            if file_path in index:
+                if working_files[file_path] != index[file_path]:
+                    unstaged_files.append(file_path)
+    
+        if unstaged_files:
+            print("\nChanges not staged for commit:")
+            for file_path in sorted(unstaged_files):
+                print(f"   modified: {file_path}")
+
+
+
+        #what files are untracked(not in index and not in prev_commit)
+        for file_path in working_files:
+            if file_path not in index and file_path not in last_index:
+                untracked_files.append(file_path)
+
+        if untracked_files:
+            print("\nUntracked files:")
+            for file_path in sorted(untracked_files):
+                print(f"  untracked: {file_path}")
+
+        #what files have been deleted
+        for file_path in index:
+            if file_path not in working_files:
+                deleted_files.append(file_path)
+            
+        if deleted_files:
+            print("\nDeleted files:")
+            for file_path in sorted(deleted_files):
+                print(f"  deleted: {file_path}")
+
+        if not staged_files and not unstaged_files and not untracked_files and not deleted_files:
+            print(f"\nnothing to commit working tree clean")
+
+                
 def main():
     parser = argparse.ArgumentParser(
         description="PyGit -A simple git clone!"
@@ -634,6 +741,10 @@ def main():
     #log command
     log_parser = subparsers.add_parser("log",help="Show commit history")
     log_parser.add_argument("-n","--max-count",type=int,default=10,help="Limit commits shown")
+
+    #status command
+    status_parser = subparsers.add_parser("status", help="Show repository status")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -642,6 +753,7 @@ def main():
     repo = Repository()
     try:
         if args.command == "init":
+            # Call the function and check if it failed.
             if not repo.init():
                 print("Repository already exists")
                 return
@@ -665,16 +777,19 @@ def main():
         elif args.command == "branch":
             if not repo.get_dir.exists():
                 print("Not a git repository")
-                return
+                return 
             repo.branch(args.name,args.delete)
         elif args.command == "log":
             if not repo.get_dir.exists():
                 print("Not a git repository")
                 return
             repo.log(args.max_count)
+        elif args.command == "status":
+            if not repo.get_dir.exists():
+                print("Not a git repository")
+                return
+            repo.status()
 
-
-            
 
     except Exception as e:
         print(f"Error: {e}")

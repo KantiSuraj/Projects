@@ -283,3 +283,8 @@ The Working Directory (Real Files): What is actually sitting on your disk right 
 Modified but not added: Working Dir != Index.
 Added but not committed: Index != HEAD.
 Clean: Working Dir == Index == HEAD.
+
+State	Meaning	Command that got it there
+Modified / Untracked	Changes exist on your disk, but the Index doesn't know about them yet.	You stage a file modify it and then don't stage it again
+Staged	The changes are recorded in the Index. They are "ready" to be wrapped in a commit.	python main.py add .
+Committed	The version in the Index has been safely stored in the .pygit/objects database as a permanent snapshot.	python main.py commit -m "..."
