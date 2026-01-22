@@ -236,6 +236,7 @@ class Repository:
            raise FileNotFoundError(f"Path {path} not found")
         if not full_path.is_dir():
             raise ValueError(f"{path} is not a directory")
+        
         ignore_list = set()
         ignore_file_path = self.path / ".pygitignore"
         if ignore_file_path.exists():
@@ -249,17 +250,16 @@ class Repository:
             
             if file_path.is_file():
 
+                rel_path = str(file_path.relative_to(self.path)) #we need rel path here file path is abs path
                 if ".pygit" in file_path.parts:
                     continue
                 if any(part in ignore_list for part in file_path.parts) or rel_path in ignore_list:
                     continue
-
-                rel_path = str(file_path.relative_to(self.path)) #we need rel path here file path is abs path
                 #creat blob objcts for all files
                 content = file_path.read_bytes()
                 new_hash = Blob(content).hash()
                 #improvement:Only store and update if the hash has changed
-                if index[rel_path] != new_hash:
+                if index.get(rel_path) != new_hash:
                     blob = Blob(content)
                     #store all blobs in the object database(.git/objects)
                     blob_hash = self.store_object(blob)
@@ -350,6 +350,7 @@ class Repository:
         return None
 
     def set_branch_commit(self,current_branch:str,commit_hash):
+        # if file don't exist it auto create it
         branch_file = self.heads_dir / current_branch
         branch_file.write_text(commit_hash + "\n")
         
@@ -478,6 +479,10 @@ class Repository:
             try:
                 if file_path.is_file():
                     file_path.unlink()
+                #removing empty directory
+                elif file_path.is_dir():
+                    if not any(file_path.iterdir()):
+                        file_path.rmdir()
             except Exception:
                 pass
 
@@ -538,6 +543,46 @@ class Repository:
         self.restore_working_directory(branch,files_to_clear) 
         print(f"Switched to branch {branch}")   
 
+
+    def branch(self,branch_name:str,delete:bool = False):
+        current_branch =  self.get_current_branch() 
+        # delete 
+        if delete:
+            if not branch_name:
+                print("Error: You must provide a branch name to delete.")
+                return
+            
+            branch_file = self.heads_dir / branch_name
+            if branch_file.exists():
+                if branch_name == self.get_current_branch():
+                    print(f"Error: Cannot delete the branch you are currently on: {branch_name}")
+                    return
+                branch_file.unlink()
+                print(f"Deleted branch {branch_name}")
+            else:
+                print(f"Branch {branch_name} not found")
+
+        # Case 2: Creation
+        elif branch_name:
+            current_commit = self.get_branch_commit(current_branch)
+            if current_commit:
+                self.set_branch_commit(branch_name,current_commit)
+                print(f"Created branch {branch_name}")
+            else:
+                    print(f"No commits yet, cannot create a new branch")
+            return
+        # Case 3: Listing
+        else:
+            branches = []
+            for branch_file in self.heads_dir.iterdir():
+                if branch_file.is_file():
+                    branches.append(branch_file.name)
+            
+            for branch in sorted(branches):
+                current_marker = "* " if branch == current_branch else "  "
+                print(f"{current_marker}{branch}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="PyGit -A simple git clone!"
@@ -562,6 +607,12 @@ def main():
     checkout_parser.add_argument("-b","--create-branch",action="store_true",help="Create and switch to a new branch")
     checkout_parser.add_argument("branch",help="Branch to switch to")
 
+    #branch command
+    branch_parser = subparsers.add_parser("branch",help="List or manage branches")
+    branch_parser.add_argument("name",nargs="?")
+    branch_parser.add_argument("-d","--delete",action="store_true",help="Delete the branch")
+    
+    
     args = parser.parse_args()
 
     if not args.command:
@@ -590,6 +641,12 @@ def main():
                 print("Not a git repository")
                 return
             repo.checkout(args.branch,args.create_branch)
+        elif args.command == "branch":
+            if not repo.get_dir.exists():
+                print("Not a git repository")
+                return
+            repo.branch(args.name,args.delete)
+
             
 
     except Exception as e:
