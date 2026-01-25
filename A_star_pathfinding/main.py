@@ -66,13 +66,22 @@ class Node:
         self.color =TURQUOISE
 
     def make_path(self):
-        self.coolor = PURPLE
+        self.color = PURPLE
     
     def draw(self,WIN):
         pygame.draw.rect(WIN,self.color,(self.x,self.y,self.width,self.width))
 
     def update_neighbours(self,grid):
-        pass
+        self.neighbours = []
+        drow = [0,1,0,-1]
+        dcol = [1,0,-1,0]
+        for i in range(0,4):
+            trow = self.row + drow[i]
+            tcol = self.col + dcol[i]
+            if 0 <= trow < self.total_rows and 0 <= tcol < self.total_rows:
+                if not grid[trow][tcol].is_barrier():
+                    self.neighbours.append(grid[trow][tcol])
+
 
     def __lt__(self,other):
         return False
@@ -81,6 +90,75 @@ def h(p1,p2):
     x1 ,y1 = p1
     x2,y2 = p2
     return abs(x1 - x2) + abs(y1 - y2)
+
+
+def algorithm(draw,grid,start,end):
+    count = 0
+    open_set = PriorityQueue()
+    came_from = {}
+
+    g_score = {}
+    f_score = {}
+
+    for row in grid:
+        for node in row:
+            g_score[node] = float("inf")
+            f_score[node] = float("inf")
+
+    g_score[start] = 0    
+    f_score[start]= h(start.get_pos(),end.get_pos())
+    open_set.put((f_score[start],count,start))
+    
+    
+    came_from[start] = None
+
+    open_set_hash = {start}
+    closed_set = set()
+
+    while not open_set.empty():
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+
+        score,count,current = open_set.get()
+        open_set_hash.remove(current)
+
+        if current == end:
+            while current in came_from and came_from[current] is not None:
+                current = came_from[current]
+                current.make_path()
+            end.make_end()
+            return True
+
+        closed_set.add(current)
+        if current != start:
+            current.make_closed()
+        
+        for spot in current.neighbours:
+            if spot in closed_set:
+                continue
+            
+            #If you later introduce weighted terrain (mud, water, hills):
+            # temp_g_score = g_score[current] + spot.weight
+            temp_g_score = g_score[current] + 1 
+
+            if temp_g_score < g_score[spot]:
+                g_score[spot] = temp_g_score
+                f_score[spot] = temp_g_score + h(spot.get_pos(),end.get_pos())
+                came_from[spot] = current
+
+                if spot not in open_set_hash:
+                    count += 1
+                    open_set.put((f_score[spot],count,spot))
+                    open_set_hash.add(spot)
+                    spot.make_open()
+
+    draw()
+
+    return False
+
+
 
 
 def make_grid(rows , width):
@@ -130,15 +208,12 @@ def main(win,width):
     end = None
 
     run = True
-    started = False
     while run:
         draw(win,grid,ROWS,width)
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 run = False
 
-            if started:
-                continue
             if pygame.mouse.get_pressed()[0]:#LEFT
                 pos = pygame.mouse.get_pos()
                 row,col = get_clicked_pos(pos,ROWS,width)
@@ -165,9 +240,47 @@ def main(win,width):
                 elif spot == end:
                     end = None
 
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_SPACE and start and end:
+                    for row in grid:
+                        for spot in row:
+                            spot.update_neighbours(grid)
+                    algorithm(lambda: draw(win,grid,ROWS,width),grid,start,end)
+
+                if event.key == pygame.K_c:
+                    start  = None
+                    end  = None
+                    grid = make_grid(ROWS,width)
+
 
 
     pygame.quit()
 
 main(WIN,WIDTH)
-    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# #open_set_hash guarantees:
+# “There is at most one active scheduled instance of this node in the queue.”
+# It does not guarantee:
+# that the node will never be reinserted
+# that old entries never existed
+# What actually happens in practice
+# Node is inserted into open_set
+# Later, a better path is found
+# If the node is already scheduled, you update scores but do not reinsert
+# If it was already popped, it may be reinserted
+
+
+#we use count because if f_score for different node is same priority_queue checks for count
